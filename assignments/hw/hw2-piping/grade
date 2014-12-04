@@ -1,2 +1,3 @@
-110 / 100
+150 / 100
 checksyscall -40, part1 25, part2 25, part3 50 extra1 +20, extra2 +20, early submission +10
+regraded checksyscall she uses MACRO for perror, after checking, everything is okay. so +40 from 110
