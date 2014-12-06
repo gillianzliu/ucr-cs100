@@ -64,36 +64,74 @@ function padPercent {
     printf "$1"
 }
 
+##########################################
+#colors
+red="\x1b[31m"
+green="\x1b[32m"
+yellow="\x1b[33m"
+blue="\x1b[34m"
+mag="\x1b[35m"
+cyn="\x1b[36m"
+endcolor="\x1b[0m"
+
 function error {
-    echo "ERROR: $@" >&2
+    echo -e "$red ERROR: $@$endcolor" >&2
     failScript
+}
+function warning
+{
+    echo -e "$yellow WARN: $@$endcolor" >&2
 }
 
 #######################################
 # get student info
 
+# prints the names of the csaccount of each student on a separate line
+function getStudentList {
+    for file in $studentinfo/*; do
+        basename "$file"
+    done
+}
+
 # $1 = the student's csaccount (which is the name of file containing their info)
 # $2 = the attribute you want about the student
 function getStudentInfo {
-    if [ ! -e "$studentinfo/$1" ]; then
-        error "student $1 does not exist"
-    fi
+    #csaccount=$(simplifycsaccount $1)
+    #if [ -z "$csaccount" ] || [ ! -e "$studentinfo/$csaccount" ]; then
+        #error "student $csaccount does not exist"
+    #fi
+    csaccount="$1"
     if [ -z "$2" ]; then
         error "attribute not given"
     fi
 
     # FIXME: this matches any attribute that contains $2 rather than equals $2
-    ret=$(awk -F "=" "/^$2/ {print \$2}" "$studentinfo/$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    ret=$(awk -F "=" "/^$2/ {print \$2}" "$studentinfo/$csaccount" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     if [ -z "$ret" ]; then
-        error "student $1 does not have attribute $2 in their studentinfo file"
+        error "student $csaccount does not have attribute $2 in their studentinfo file"
     fi
     echo "$ret"
 }
 
-function getStudentList {
-    for file in $studentinfo/*; do
-        basename "$file"
-    done
+# $1 = the student's csaccount (which is the name of file containing their info)
+#      OR a string of the form "github=XXX" where XXX is the student's github account
+# output is the student's csaccount
+function simplifycsaccount {
+    local csaccount="$1"
+    if [ $(echo "$1" | cut -d'=' -f 1) = "github" ]; then
+        csaccount=$(github2csaccount $(echo "$1" | cut -d'=' -f 2))
+    fi
+    echo "$csaccount"
+}
+
+# $1 = the student's github account
+function github2csaccount {
+    local student=$(grep -r "^[[:space:]]*github[[:space:]]*=[[:space:]]*$1[[:space:]]*\$" ./people/students/ | cut -d':' -f 1)
+    if [ ! -z "$student" ]; then
+        basename "$student"
+    else
+        error "github account $1 is not registered"
+    fi
 }
 
 #######################################
@@ -121,8 +159,8 @@ function downloadAllProjects {
     accountlist=$(getStudentList)
 
     # this weird xargs command runs all of the downloadProject functions in parallel
-    if ! (echo "$accountlist" | xargs -n 1 -P 50 bash -c "downloadProject $1 \$1 $2" -- ); then
-    #if ! (echo "$accountlist" | xargs -n 1 -P 4 bash -c "downloadProject $1 \$1 $2" -- ); then
+    if ! (echo "$accountlist" | xargs -n 1 -P 100 bash -c "downloadProject $1 \$1 $2" -- ); then
+    #if ! (echo "$accountlist" | xargs -n 1 -P 1 bash -c "downloadProject $1 \$1 $2" -- ); then
         echo "ERROR: some repos failed to download;"
         echo "sometimes we exceed github's connection limits due to parallel downloading;"
         echo "trying again might work?"
@@ -185,7 +223,7 @@ function uploadAllGrades {
     echo "uploading repos..."
     accountlist=$(getStudentList)
 
-    # this weird xargs command runs all of the downloadProject functions in parallel
+    # this weird xargs command runs all of the uploadGrades functions in parallel
     if ! (echo "$accountlist" | xargs -n 1 -P 4 bash -c "uploadGrades \$1" -- ); then
         error "ERROR: some repos failed to upload; sometimes we exceed github's connection limits due to parallel uploading; trying again might work?"
     fi
@@ -199,6 +237,7 @@ function uploadGrades {
     for file in `find . -name grade`; do
         git add $file
     done
+
     git commit -S -m "graded assignment using automatic scripts"
 
     echo "changes committed... uploading to github"
@@ -312,8 +351,33 @@ function totalOutOf {
     echo "$totaloutof"
 }
 
+# calculates the current percentage for user $1 in directory $2
+function runningTotalGradePercent {
+    mkPercent $(totalGrade $1 $2) $(runningTotalOutOf $1 $2)
+}
+
+# calculates the final percentage for user $1 in directory $2
+function totalGradePercent {
+    mkPercent $(totalGrade $1 $2) $(totalOutOf $1 $2)
+}
+
 #######################################
 # displaying grades
+
+# $1 = numerator
+# $2 = denominator
+function mkPercent {
+    if [ "$2" = "0" ]; then
+        #echo "NaN"
+        if [ "$1" = "0" ]; then
+            echo "0.00"
+        else
+            echo "100.00"
+        fi
+    else
+        bc <<< "scale=2; 100 * $1/$2"
+    fi
+}
 
 # $1 = percent
 function colorPercent {
@@ -321,18 +385,18 @@ function colorPercent {
     if [[ -z $1 ]]; then
         resetColor
     elif ((`bc <<< "$per>90"`)); then
-        printf "\x1b[32m"
+        printf "$green"
     elif ((`bc <<< "$per>80"`)); then
-        printf "\x1b[36m"
+        printf "$cyn"
     elif ((`bc <<< "$per>70"`)); then
-        printf "\x1b[33m"
+        printf "$yellow"
     else
-        printf "\x1b[31m"
+        printf "$red"
     fi
 }
 
 function resetColor {
-    printf "\x1b[0m"
+    printf "$endcolor"
 }
 
 # $1 = percent
@@ -347,29 +411,29 @@ function dispPercent {
 function percentToLetter {
     per="$1"
     colorPercent "$1"
-    if ((`bc <<< "$per>97"`)); then
+    if ((`bc <<< "$per>=97"`)); then
         printf "A+"
-    elif ((`bc <<< "$per>93"`)); then
+    elif ((`bc <<< "$per>=93"`)); then
         printf "A "
-    elif ((`bc <<< "$per>90"`)); then
+    elif ((`bc <<< "$per>=90"`)); then
         printf "A-"
-    elif ((`bc <<< "$per>87"`)); then
+    elif ((`bc <<< "$per>=87"`)); then
         printf "B+"
-    elif ((`bc <<< "$per>83"`)); then
+    elif ((`bc <<< "$per>=83"`)); then
         printf "B "
-    elif ((`bc <<< "$per>80"`)); then
+    elif ((`bc <<< "$per>=80"`)); then
         printf "B-"
-    elif ((`bc <<< "$per>77"`)); then
+    elif ((`bc <<< "$per>=77"`)); then
         printf "C+"
-    elif ((`bc <<< "$per>73"`)); then
+    elif ((`bc <<< "$per>=73"`)); then
         printf "C "
-    elif ((`bc <<< "$per>70"`)); then
+    elif ((`bc <<< "$per>=70"`)); then
         printf "C-"
-    elif ((`bc <<< "$per>67"`)); then
+    elif ((`bc <<< "$per>=67"`)); then
         printf "D+"
-    elif ((`bc <<< "$per>63"`)); then
+    elif ((`bc <<< "$per>=63"`)); then
         printf "D "
-    elif ((`bc <<< "$per>60"`)); then
+    elif ((`bc <<< "$per>=60"`)); then
         printf "D-"
     else
         printf "F "
@@ -377,4 +441,46 @@ function percentToLetter {
     resetColor
 }
 
+##################################
+#checks if a public key is in the instructor files
+# $1 = file to check
+# $2 = key to compare
+function includesKey
+{
+    local instructor=$1
+    local key=$2
+
+    if [ ! -f $instructor ]; then
+        return 1
+    fi
+
+    local instructorKeys=$( gpg --with-fingerprint $instructor | sed -n '/pub/p' | cut -c 12,13,14,15,16,17,18,19 )
+
+    if [[ $instructorKeys == *$key* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+##########################################
+#checks if keys are installed
+checkKeys()
+{
+    which gpg > /dev/null 2> /dev/null
+    if [ ! $? -eq 0 ];then
+        error "you need to install gpg:$yellow https://www.gnupg.org/download/"
+    fi
+    for INST in people/instructors/*;do
+        local STR=${INST##*/}
+        if [[ $STR == *@* ]];then
+            gpg --list-keys $STR  > /dev/null 2> /dev/null
+            if [ ! $? -eq 0 ] ;then
+                warning "Instructor keys were not installed! Installing..."
+                scripts/install-instructor-keys.sh
+                echo -e "$green Done installing keys!!$endcolor"
+            fi
+        fi
+    done
+}
 
